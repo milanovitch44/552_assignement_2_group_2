@@ -1,0 +1,6 @@
+.venv
+src/deep_learning_hw2/__init__.py
+todo_milan.md
+uv.lock
+**/__pycache__/**
+old_git
