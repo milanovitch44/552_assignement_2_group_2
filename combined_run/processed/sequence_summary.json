@@ -1,0 +1,22 @@
+{
+  "K": 6,
+  "train_sequences": 48822,
+  "validation_sequences": 10500,
+  "test_sequences": 10514,
+  "total_sequences": 69836,
+  "X_train_shape": [
+    48822,
+    6,
+    4
+  ],
+  "X_validation_shape": [
+    10500,
+    6,
+    4
+  ],
+  "X_test_shape": [
+    10514,
+    6,
+    4
+  ]
+}
