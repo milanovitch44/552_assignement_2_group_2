@@ -28,12 +28,12 @@ def rnn_step_forward(x, prev_h, Wx, Wh, b):
   """
   next_h, cache = None, None
   ##############################################################################
-  # TODO: Implement a single forward step for the vanilla RNN. Store the next  #
-  # hidden state and any values you need for the backward pass in the next_h   #
-  # and cache variables respectively.                                          #
   ##############################################################################
+  # Linear pre-activation: x @ Wx (N, H) + prev_h @ Wh (N, H) + b (H,) -> shape (N, H)
   h = np.dot(x, Wx) + np.dot(prev_h, Wh) + b
+  # Non-linear activation squashed into [-1, 1]: shape (N, H)
   next_h = np.tanh(h)
+  # Cache inputs, weights, and pre-activation for backward pass
   cache = (x, prev_h, Wx, Wh, h)
   ##############################################################################
   #                               END OF YOUR CODE                             #
@@ -52,25 +52,27 @@ def rnn_step_backward(dnext_h, cache):
   Returns a tuple of:
   - dx: Gradients of input data, of shape (N, D)
   - dprev_h: Gradients of previous hidden state, of shape (N, H)
-  - dWx: Gradients of input-to-hidden weights, of shape (N, H)
+  - dWx: Gradients of input-to-hidden weights, of shape (D, H)
   - dWh: Gradients of hidden-to-hidden weights, of shape (H, H)
   - db: Gradients of bias vector, of shape (H,)
   """
   dx, dprev_h, dWx, dWh, db = None, None, None, None, None
   ##############################################################################
-  # TODO: Implement the backward pass for a single step of a vanilla RNN.      #
-  #                                                                            #
-  # HINT: For the tanh function, you can compute the local derivative in terms #
-  # of the output value from tanh.                                             #
   ##############################################################################
   x, prev_h, Wx, Wh, h = cache
 
+  # Gradient through tanh nonlinearity: dtanh = dnext_h * (1 - tanh(h)^2) -> shape (N, H)
   dtanh = dnext_h * (1 - np.tanh(h)**2)
 
+  # dx = dtanh @ Wx.T: (N, H) @ (H, D) -> (N, D)
   dx = np.dot(dtanh, Wx.T)
+  # dprev_h = dtanh @ Wh.T: (N, H) @ (H, H) -> (N, H)
   dprev_h = np.dot(dtanh, Wh.T)
+  # dWx = x.T @ dtanh: (D, N) @ (N, H) -> (D, H)
   dWx = np.dot(x.T, dtanh)
+  # dWh = prev_h.T @ dtanh: (H, N) @ (N, H) -> (H, H)
   dWh = np.dot(prev_h.T, dtanh)
+  # db = sum of dtanh over batch dimension N -> shape (H,)
   db = np.sum(dtanh, axis=0)
   ##############################################################################
   #                               END OF YOUR CODE                             #
@@ -98,26 +100,28 @@ def rnn_forward(x, h0, Wx, Wh, b):
   """
   h, cache = None, None
   ##############################################################################
-  # TODO: Implement forward pass for a vanilla RNN running on a sequence of    #
-  # input data. You should use the rnn_step_forward function that you defined  #
-  # above.                                                                     #
   ##############################################################################
   N, T, D = x.shape
   H = h0.shape[1]
 
+  # Pre-allocate tensor to store hidden states for all T timesteps: shape (N, T, H)
   h = np.zeros((N, T, H))
 
-  prev_h = h0
+  prev_h = h0 # Initialize hidden state at t=0 with h0: shape (N, H)
   step_caches = []
 
+  # Iterate forward chronologically through sequence timesteps t = 0 ... T-1
   for t in range(T):
+    # Slice current timestep input x[:, t, :] of shape (N, D)
     next_h, step_cache = rnn_step_forward(
         x[:, t, :], prev_h, Wx, Wh, b
     )
 
+    # Store hidden activation into output tensor: shape (N, H)
     h[:, t, :] = next_h
     step_caches.append(step_cache)
 
+    # Pass hidden state to next timestep
     prev_h = next_h
 
   cache = (x, h0, Wx, Wh, b, step_caches)
@@ -143,34 +147,39 @@ def rnn_backward(dh, cache):
   """
   dx, dh0, dWx, dWh, db = None, None, None, None, None
   ##############################################################################
-  # TODO: Implement the backward pass for a vanilla RNN running an entire      #
-  # sequence of data. You should use the rnn_step_backward function that you   #
-  # defined above.                                                             #
   ##############################################################################
   x, h0, Wx, Wh, b, step_caches = cache
 
   N, T, D = x.shape
   H = h0.shape[1]
 
-  dx = np.zeros_like(x)
-  dWx = np.zeros_like(Wx)
-  dWh = np.zeros_like(Wh)
-  db = np.zeros_like(b)
+  # Allocate gradient buffers matching their respective tensor shapes
+  dx = np.zeros_like(x)      # (N, T, D)
+  dWx = np.zeros_like(Wx)    # (D, H)
+  dWh = np.zeros_like(Wh)    # (H, H)
+  db = np.zeros_like(b)      # (H,)
 
+  # Gradient flowing from future hidden state; 0 at terminal timestep t=T-1: shape (N, H)
   dprev_h = np.zeros_like(h0)
 
+  # Backpropagate through time (BPTT) in reverse chronological order: t = T-1 down to 0
   for t in reversed(range(T)):
+    # Total gradient at timestep t combines direct loss gradient dh[:, t, :] and recurrence from t+1
     dcurrent_h = dh[:, t, :] + dprev_h
 
+    # Step backward through single RNN cell
     dx_t, dprev_h, dWx_t, dWh_t, db_t = rnn_step_backward(
         dcurrent_h, step_caches[t]
     )
 
+    # Store input gradient for timestep t: shape (N, D)
     dx[:, t, :] = dx_t
+    # Accumulate shared parameter gradients across all timesteps
     dWx += dWx_t
     dWh += dWh_t
     db += db_t
 
+  # Gradient arriving at initial hidden state h0: shape (N, H)
   dh0 = dprev_h
   ##############################################################################
   #                               END OF YOUR CODE                             #
@@ -200,27 +209,31 @@ def lstm_step_forward(x, prev_h, prev_c, Wx, Wh, b):
   """
   next_h, next_c, cache = None, None, None
   #############################################################################
-  # TODO: Implement the forward pass for a single timestep of an LSTM.        #
-  # You may want to use the numerically stable sigmoid implementation above.  #
   #############################################################################
   N, D = x.shape
   H = prev_h.shape[1]
 
+  # Joint affine projection for all 4 gates: (N, D) @ (D, 4H) + (N, H) @ (H, 4H) + (4H,) -> shape (N, 4H)
   a = np.dot(x, Wx) + np.dot(prev_h, Wh) + b
 
-  ai = a[:, :H]
-  af = a[:, H:2*H]
-  ao = a[:, 2*H:3*H]
-  ag = a[:, 3*H:]
+  # Split joint activation into 4 gate vectors of size H each
+  ai = a[:, :H]        # Input gate pre-activation: shape (N, H)
+  af = a[:, H:2*H]     # Forget gate pre-activation: shape (N, H)
+  ao = a[:, 2*H:3*H]   # Output gate pre-activation: shape (N, H)
+  ag = a[:, 3*H:]      # Candidate cell pre-activation: shape (N, H)
 
-  i = 1 / (1 + np.exp(-ai))
-  f = 1 / (1 + np.exp(-af))
-  o = 1 / (1 + np.exp(-ao))
-  g = np.tanh(ag)
+  # Non-linear activations: sigmoids produce gates in [0, 1]; tanh produces candidate in [-1, 1]
+  i = 1 / (1 + np.exp(-ai)) # Input gate: how much new info to write
+  f = 1 / (1 + np.exp(-af)) # Forget gate: how much old cell state to retain
+  o = 1 / (1 + np.exp(-ao)) # Output gate: how much cell state to expose to hidden state
+  g = np.tanh(ag)           # Candidate values to add to cell state
 
+  # Cell state update: retain fraction of prev_c + add gated candidate values: shape (N, H)
   next_c = f * prev_c + i * g
+  # Hidden state: squashed cell state filtered by output gate: shape (N, H)
   next_h = o * np.tanh(next_c)
 
+  # Cache activations and weights for chain rule in backward pass
   cache = (x, prev_h, prev_c, Wx, Wh, b, i, f, o, g, next_c)
   ##############################################################################
   #                               END OF YOUR CODE                             #
@@ -248,41 +261,38 @@ def lstm_step_backward(dnext_h, dnext_c, cache):
   """
   dx, dh, dc, dWx, dWh, db = None, None, None, None, None, None
   #############################################################################
-  # TODO: Implement the backward pass for a single timestep of an LSTM.       #
-  #                                                                           #
-  # HINT: For sigmoid and tanh you can compute local derivatives in terms of  #
-  # the output value from the nonlinearity.                                   #
   #############################################################################
   x, prev_h, prev_c, Wx, Wh, b, i, f, o, g, next_c = cache
 
-  tanh_next_c = np.tanh(next_c)
+  tanh_next_c = np.tanh(next_c) # shape (N, H)
 
-  # Gradient through the hidden state
+  # Gradient through output gate: next_h = o * tanh(next_c) -> do = dnext_h * tanh(next_c): shape (N, H)
   do = dnext_h * tanh_next_c
+  # Total cell gradient: upstream dnext_c + path through next_h (dnext_h * o * (1 - tanh^2)): shape (N, H)
   dtotal_c = dnext_c + dnext_h * o * (1 - tanh_next_c**2)
 
-  # Gradient through the cell state
-  df = dtotal_c * prev_c
-  dprev_c = dtotal_c * f
+  # Gradients through next_c = f * prev_c + i * g
+  df = dtotal_c * prev_c        # Gradient w.r.t forget gate: shape (N, H)
+  dprev_c = dtotal_c * f        # Gradient w.r.t previous cell state: shape (N, H)
 
-  di = dtotal_c * g
-  dg = dtotal_c * i
+  di = dtotal_c * g             # Gradient w.r.t input gate: shape (N, H)
+  dg = dtotal_c * i             # Gradient w.r.t candidate cell: shape (N, H)
 
-  # Gradients through the gates
-  dai = di * i * (1 - i)
-  daf = df * f * (1 - f)
-  dao = do * o * (1 - o)
-  dag = dg * (1 - g**2)
+  # Backprop through gate activations: sigmoid derivative is s*(1-s), tanh derivative is (1-g^2)
+  dai = di * i * (1 - i)        # Pre-activation input gate gradient: shape (N, H)
+  daf = df * f * (1 - f)        # Pre-activation forget gate gradient: shape (N, H)
+  dao = do * o * (1 - o)        # Pre-activation output gate gradient: shape (N, H)
+  dag = dg * (1 - g**2)         # Pre-activation candidate gradient: shape (N, H)
 
-  # Combine gate gradients
+  # Concatenate gate pre-activation gradients along feature dimension: shape (N, 4H)
   da = np.hstack((dai, daf, dao, dag))
 
-  # Gradients with respect to inputs and weights
-  dx = np.dot(da, Wx.T)
-  dprev_h = np.dot(da, Wh.T)
-  dWx = np.dot(x.T, da)
-  dWh = np.dot(prev_h.T, da)
-  db = np.sum(da, axis=0)
+  # Gradients with respect to inputs, states, and shared parameters
+  dx = np.dot(da, Wx.T)         # (N, 4H) @ (4H, D) -> shape (N, D)
+  dprev_h = np.dot(da, Wh.T)    # (N, 4H) @ (4H, H) -> shape (N, H)
+  dWx = np.dot(x.T, da)         # (D, N) @ (N, 4H) -> shape (D, 4H)
+  dWh = np.dot(prev_h.T, da)    # (H, N) @ (N, 4H) -> shape (H, 4H)
+  db = np.sum(da, axis=0)       # Sum across batch dimension N -> shape (4H,)
   ##############################################################################
   #                               END OF YOUR CODE                             #
   ##############################################################################
@@ -314,29 +324,32 @@ def lstm_forward(x, h0, Wx, Wh, b):
   """
   h, cache = None, None
   #############################################################################
-  # TODO: Implement the forward pass for an LSTM over an entire timeseries.   #
-  # You should use the lstm_step_forward function that you just defined.      #
   #############################################################################
   N, T, D = x.shape
   H = h0.shape[1]
 
+  # Pre-allocate output hidden state buffer for all T timesteps: shape (N, T, H)
   h = np.zeros((N, T, H))
 
+  # Initial states: prev_h set to h0, prev_c initialized to all zeros: shape (N, H)
   prev_h = h0
   prev_c = np.zeros_like(h0)
 
   step_caches = []
 
+  # Forward pass unrolled across sequence timesteps t = 0 ... T-1
   for t in range(T):
-
+    # Execute single LSTM step forward with input slice x[:, t, :] of shape (N, D)
     next_h, next_c, step_cache = lstm_step_forward(
         x[:, t, :], prev_h, prev_c, Wx, Wh, b
     )
 
+    # Record hidden state at timestep t: shape (N, H)
     h[:, t, :] = next_h
 
     step_caches.append(step_cache)
 
+    # Advance both hidden and internal cell states to next timestep
     prev_h = next_h
     prev_c = next_c
 
@@ -365,34 +378,40 @@ def lstm_backward(dh, cache):
   """
   dx, dh0, dWx, dWh, db = None, None, None, None, None
   #############################################################################
-  # TODO: Implement the backward pass for an LSTM over an entire timeseries.  #
-  # You should use the lstm_step_backward function that you just defined.     #
   #############################################################################
   x, h0, Wx, Wh, b, step_caches = cache
 
   N, T, D = x.shape
   H = h0.shape[1]
 
-  dx = np.zeros_like(x)
-  dWx = np.zeros_like(Wx)
-  dWh = np.zeros_like(Wh)
-  db = np.zeros_like(b)
+  # Allocate gradient buffers
+  dx = np.zeros_like(x)      # (N, T, D)
+  dWx = np.zeros_like(Wx)    # (D, 4H)
+  dWh = np.zeros_like(Wh)    # (H, 4H)
+  db = np.zeros_like(b)      # (4H,)
 
+  # Recurring gradient states from future timestep (t+1); initially zeros: shape (N, H)
   dprev_h = np.zeros_like(h0)
   dprev_c = np.zeros_like(h0)
 
+  # Backpropagate through time (BPTT) backwards from t = T-1 down to 0
   for t in reversed(range(T)):
+    # Sum upstream direct gradient dh[:, t, :] with recurrence gradient from t+1
     dcurrent_h = dh[:, t, :] + dprev_h
 
+    # Step backward through single LSTM cell
     dx_t, dprev_h, dprev_c, dWx_t, dWh_t, db_t = lstm_step_backward(
         dcurrent_h, dprev_c, step_caches[t]
     )
 
+    # Assign input gradient for current timestep: shape (N, D)
     dx[:, t, :] = dx_t
+    # Accumulate parameter gradients across all timesteps
     dWx += dWx_t
     dWh += dWh_t
     db += db_t
 
+  # Gradient flowing into initial hidden state h0: shape (N, H)
   dh0 = dprev_h
   ##############################################################################
   #                               END OF YOUR CODE                             #

@@ -80,40 +80,45 @@ def conv_forward_naive(x, w, b, conv_param):
       W' = 1 + (W + 2 * pad - WW) / stride
     - cache: (x, w, b, conv_param)
     """
+    # Stride and zero-padding hyperparameters
     stride = conv_param.get("stride", 1)
     pad = conv_param.get("pad", 0)
 
+    # Input dimensions: batch size N, channels C, spatial height H, width W
     N, C, H, W = x.shape
+    # Filter dimensions: number of filters F, channels C_w, kernel height HH, width WW
     F, C_w, HH, WW = w.shape
     assert C == C_w, "Input channels must match filter channels"
 
-    # Compute output dimensions
+    # Compute output spatial dimensions H_out and W_out using standard convolution formula
     H_out = 1 + (H + 2 * pad - HH) // stride
     W_out = 1 + (W + 2 * pad - WW) // stride
 
-    # Zero-pad the input spatial dimensions
+    # Zero-pad spatial dimensions (H, W) by 'pad'; batch N and channel C are unpadded
+    # x_pad shape: (N, C, H + 2*pad, W + 2*pad)
     x_pad = np.pad(
         x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant", constant_values=0
     )  # padding should only be applied to the pixel dimensions (size H and W), not on the channels
 
-    # Initialize output array
+    # Pre-allocate output feature maps of shape (N, F, H_out, W_out)
     out = np.zeros((N, F, H_out, W_out))
 
-    # Naive nested loops implementation
-    for n in range(N):
-        for f in range(F):
-            for i in range(H_out):
-                for j in range(W_out):
-                    # Calculate indices
-                    # multiplying times stride causes jumps in the index, which is what stride requires
+    # Naive nested loops implementation: iterate over batches, filters, and spatial output locations
+    for n in range(N):             # Loop over each image in minibatch
+        for f in range(F):         # Loop over each convolution filter
+            for i in range(H_out): # Loop over output vertical grid
+                for j in range(W_out): # Loop over output horizontal grid
+                    # Spatial slice coordinates in x_pad according to stride step
                     h_start = i * stride
                     h_end = h_start + HH
                     w_start = j * stride
                     w_end = w_start + WW
 
+                    # Extract 3D receptive field across all C channels: shape (C, HH, WW)
                     receptive_field = x_pad[
                         n, :, h_start:h_end, w_start:w_end
                     ]  # receptive field shape = (HH, WW)
+                    # Element-wise multiply across (C, HH, WW), sum all elements, and add scalar bias b[f]
                     out[n, f, i, j] = np.sum(receptive_field * w[f]) + b[f]
 
     cache = (x, w, b, conv_param)
@@ -138,44 +143,47 @@ def conv_backward_naive(dout, cache):
     stride = conv_param.get("stride", 1)
     pad = conv_param.get("pad", 0)
 
+    # Input and filter shapes
     N, C, H, W = x.shape
     F, _, HH, WW = w.shape
-    _, _, H_out, W_out = dout.shape
+    _, _, H_out, W_out = dout.shape # dout shape: (N, F, H_out, W_out)
 
-    # Zero-pad the input x and initialize gradients for padded x
+    # Recreate padded input matching forward pass: shape (N, C, H + 2*pad, W + 2*pad)
     x_pad = np.pad(
         x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant", constant_values=0
     )
-    dx_pad = np.zeros_like(x_pad)
-    dw = np.zeros_like(w)
-    db = np.zeros_like(b)
+    # Initialize gradient containers matching their parameter shapes
+    dx_pad = np.zeros_like(x_pad) # Shape: (N, C, H + 2*pad, W + 2*pad)
+    dw = np.zeros_like(w)         # Shape: (F, C, HH, WW)
+    db = np.zeros_like(b)         # Shape: (F,)
 
-    # Compute db by summing over batch, height, and width dimensions of dout
+    # db[f] = sum of dout[:, f, :, :] over N, H_out, and W_out (broadcast reverse)
     for f in range(F):
         db[f] = np.sum(dout[:, f, :, :])
 
-    # Naive nested loops for computing dx and dw
-    for n in range(N):
-        for f in range(F):
-            for i in range(H_out):
-                for j in range(W_out):
+    # Accumulate gradients dw and dx_pad by sliding receptive windows
+    for n in range(N):             # Loop over each image
+        for f in range(F):         # Loop over each filter
+            for i in range(H_out): # Loop over output height
+                for j in range(W_out): # Loop over output width
+                    # Receptive window bounds in padded input
                     h_start = i * stride
                     h_end = h_start + HH
                     w_start = j * stride
                     w_end = w_start + WW
 
-                    # Extract the local receptive field from the padded input
+                    # Extract local receptive field slice: shape (C, HH, WW)
                     receptive_field = x_pad[n, :, h_start:h_end, w_start:w_end]
 
-                    # Gradient with respect to filter weights (dw)
+                    # dw[f] += input_patch * upstream_scalar dout[n, f, i, j] -> shape (C, HH, WW)
                     dw[f] += receptive_field * dout[n, f, i, j]
 
-                    # Gradient with respect to padded input (dx_pad)
+                    # dx_pad += filter_weights * upstream_scalar dout[n, f, i, j] -> shape (C, HH, WW)
                     dx_pad[n, :, h_start:h_end, w_start:w_end] += (
                         w[f] * dout[n, f, i, j]
                     )
 
-    # Remove padding from dx_pad to match the original input shape x
+    # Crop off zero-padding to recover gradient dx with original shape (N, C, H, W)
     if pad > 0:
         dx = dx_pad[:, :, pad:-pad, pad:-pad]
     else:
@@ -199,30 +207,35 @@ def max_pool_forward_naive(x, pool_param):
     - out: Output data
     - cache: (x, pool_param)
     """
+    # Pooling kernel size (pool_height, pool_width) and stride
     pool_height = pool_param.get("pool_height", 2)
     pool_width = pool_param.get("pool_width", 2)
     stride = pool_param.get("stride", 2)
 
+    # Input shape: (N, C, H, W)
     N, C, H, W = x.shape
 
-    # Compute output dimensions
+    # Output spatial dimensions after downsampling
     H_out = 1 + (H - pool_height) // stride
     W_out = 1 + (W - pool_width) // stride
 
-    # Initialize output array
+    # Allocate pooled output array: shape (N, C, H_out, W_out)
     out = np.zeros((N, C, H_out, W_out))
 
-    # Naive nested loops implementation
+    # Iterate over batch N, channel C, and downsampled spatial grid (H_out, W_out)
     for n in range(N):
         for c in range(C):
             for i in range(H_out):
                 for j in range(W_out):
+                    # Bounding box of pooling window
                     h_start = i * stride
                     h_end = h_start + pool_height
                     w_start = j * stride
                     w_end = w_start + pool_width
 
+                    # Extract 2D pooling region: shape (pool_height, pool_width)
                     receptive_field = x[n, c, h_start:h_end, w_start:w_end]
+                    # Retain only maximum activation value within region
                     out[n, c, i, j] = np.max(receptive_field)
 
     cache = (x, pool_param)
@@ -246,30 +259,31 @@ def max_pool_backward_naive(dout, cache):
     stride = pool_param.get("stride", 2)
 
     N, C, H, W = x.shape
-    _, _, H_out, W_out = dout.shape
+    _, _, H_out, W_out = dout.shape # Shape: (N, C, H_out, W_out)
 
+    # Initialize input gradient array with zeros: shape (N, C, H, W)
     dx = np.zeros_like(x)
 
     for n in range(N):
         for c in range(C):
             for i in range(H_out):
                 for j in range(W_out):
-                    # Calculate index
+                    # Receptive window bounds in input
                     h_start = i * stride
                     h_end = h_start + pool_height
                     w_start = j * stride
                     w_end = w_start + pool_width
 
-                    # Extract local receptive field
+                    # Extract 2D window corresponding to this max-pool output cell: shape (pool_height, pool_width)
                     receptive_field = x[n, c, h_start:h_end, w_start:w_end]
 
-                    # Find index of the maximum value
+                    # Identify local 2D coordinate of the element that achieved maximum during forward pass
                     max_idx = np.argmax(receptive_field)  # outputs an index (1D)
                     h_max, w_max = np.unravel_index(
                         max_idx, receptive_field.shape
                     )  # converts the 1D index back into the 2D receptive field index
 
-                    # Route upstream gradient to the maximum element's position
+                    # Max-pooling subgradient: route upstream gradient exclusively to argmax position
                     dx[n, c, h_start + h_max, w_start + w_max] += dout[n, c, i, j]
 
     return dx
@@ -318,40 +332,42 @@ def batchnorm_forward(x, gamma, beta, bn_param):
     momentum = bn_param.get("momentum", 0.9)
 
     N, D = x.shape
+    # Running statistics tracked per feature dimension: shape (D,)
     running_mean = bn_param.get("running_mean", np.zeros(D, dtype=x.dtype))
     running_var = bn_param.get("running_var", np.zeros(D, dtype=x.dtype))
 
     out, cache = None, None
 
     if mode == "train":
-        # Compute minibatch mean and uncorrected variance along axis 0 (batch dimension)
+        # Minibatch mean and uncorrected variance computed per feature across batch dimension 0: shape (D,)
         sample_mean = np.mean(x, axis=0)  # shape (D)
         sample_var = np.var(x, axis=0)
 
-        # Normalize the incoming data
+        # Standardize features to zero-mean and unit-variance; eps prevents division by 0: shape (N, D)
         x_hat = (x - sample_mean) / np.sqrt(
             sample_var + eps
         )  # shape still (N,D), eps needed to prevent divide by zero
 
-        # Scale and shift using gamma and beta
+        # Affine transform: learnable scale gamma (D,) and shift beta (D,) broadcasted across N: shape (N, D)
         out = gamma * x_hat + beta  # shape still (N,D)
 
-        # Update running averages
+        # Update running averages via exponential moving average for inference time: shape (D,)
         running_mean = momentum * running_mean + (1.0 - momentum) * sample_mean
         running_var = momentum * running_var + (1.0 - momentum) * sample_var
 
-        # Cache intermediates needed for the backward pass
+        # Cache intermediate tensors required by chain rule during backward pass
         cache = (x, sample_mean, sample_var, x_hat, gamma, eps)
 
     elif mode == "test":
-        # Normalize using the accumulated running statistics
+        # Test time: normalize using fixed running dataset statistics instead of current minibatch: shape (N, D)
         x_hat = (x - running_mean) / np.sqrt(running_var + eps)  # shape still (N,D)
+        # Apply trained gamma and beta: shape (N, D)
         out = gamma * x_hat + beta  # shape still (N,D)
         cache = None
     else:
         raise ValueError(f'Invalid forward batchnorm mode "{mode}"')
 
-    # Store the updated running means back into bn_param
+    # Store updated running statistics in dictionary for subsequent iterations
     bn_param["running_mean"] = running_mean
     bn_param["running_var"] = running_var
 
@@ -378,22 +394,23 @@ def batchnorm_backward(dout, cache):
     x, sample_mean, sample_var, x_hat, gamma, eps = cache
     N, D = dout.shape
 
-    # Gradients with respect to scale and shift parameters
+    # Gradients with respect to beta and gamma (summing over batch dimension N): shape (D,)
     dbeta = np.sum(dout, axis=0)  # shape (D)
     dgamma = np.sum(dout * x_hat, axis=0)  # shape (D)
 
-    # Gradient with respect to normalized input
+    # Gradient with respect to normalized input x_hat: shape (N, D)
     dxhat = dout * gamma  # shape (N,D)
 
-    # Gradients with respect to variance and mean
+    # Gradient with respect to sample variance: dL/dvar = sum_i(dL/dxhat_i * (x_i - mean) * -0.5 * (var + eps)^(-1.5)): shape (D,)
     dvar = np.sum(
         dxhat * (x - sample_mean) * -0.5 * (sample_var + eps) ** (-1.5), axis=0
     )
+    # Gradient with respect to sample mean combining direct term and path via variance: shape (D,)
     dmean = np.sum(dxhat * -1.0 / np.sqrt(sample_var + eps), axis=0) + dvar * np.mean(
         -2.0 * (x - sample_mean), axis=0
     )
 
-    # Gradient with respect to input x
+    # Gradient with respect to input x combining direct normalized path, variance path, and mean path: shape (N, D)
     dx = (
         dxhat / np.sqrt(sample_var + eps)
         + dvar * 2.0 * (x - sample_mean) / N
